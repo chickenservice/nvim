@@ -18,9 +18,9 @@ vim.api.nvim_create_autocmd({"QuickFixCmdPost"}, {
     callback = function()
 	local errs = {}
 	for i, err in pairs(vim.fn.getqflist()) do
-	    if err.type == 'E' then
+	    if err.type == 'e' or err.type == 'E' then
 		table.insert(errs, {group = 'diagnostics', name = 'E', lnum=err.lnum, buffer=vim.api.nvim_buf_get_name(err.bufnr)})
-	    else
+	    elseif err.type == 'w' or err.type =='W' then
 		table.insert(errs, {group = 'diagnostics', name = 'W', lnum=err.lnum, buffer=vim.api.nvim_buf_get_name(err.bufnr)})
 	    end
 	end
@@ -30,22 +30,15 @@ vim.api.nvim_create_autocmd({"QuickFixCmdPost"}, {
 
 vim.api.nvim_create_autocmd({"QuickFixCmdPre"}, {
     callback = function()
-	vim.fn.sign_unplace('diagnostics')
-	--vim.fn.sign_placelist(vim.fn.getfqlist())
+	vim.fn.sign_unplace("*", {group="diagnostics"})
     end,
 })
 
-vim.api.nvim_create_autocmd("BufWrite", {
-    pattern = "*.cs",
-    group = vim.api.nvim_create_augroup('dotnet_on_save_err', { clear = true }),
-    callback = function()
-	local lines = {""}  local winnr = vim.fn.win_getid()  local bufnr = vim.api.nvim_win_get_buf(winnr)   local makeprg = vim.api.nvim_buf_get_option(bufnr, "makeprg")  if not makeprg then return end   local cmd = vim.fn.expandcmd(makeprg)   local function on_event(job_id, data, event)    if event == "stdout" or event == "stderr" then      if data then        vim.list_extend(lines, data)      end    end     if event == "exit" then      vim.fn.setqflist({}, " ", {        title = cmd,        lines = lines,        efm = vim.api.nvim_buf_get_option(bufnr, "errorformat")      })      vim.api.nvim_command("doautocmd QuickFixCmdPost")    end  end   local job_id =    vim.fn.jobstart(    cmd,    {      on_stderr = on_event,      on_stdout = on_event,      on_exit = on_event,      stdout_buffered = true,      stderr_buffered = true,    }  )end
 
-})
-
-
-vim.fn.sign_define('+', { text = '+', texthl = "", linehl = "", numhl = "" })
-vim.fn.sign_define('_', { text = '_', texthl = "", linehl = "", numhl = "" })
+vim.fn.sign_define('+', { text = '+', texthl = "DiffAdd", linehl = "DiffAdd", numhl = "" })
+vim.fn.sign_define('_', { text = '_', texthl = "DiffDelete", linehl = "DiffDelete", numhl = "" })
+vim.fn.sign_define('~_', { text = '~_', texthl = "DiffChange", linehl = "DiffChange", numhl = "" })
+vim.fn.sign_define('~', { text = '~', texthl = "DiffChange", linehl = "DiffChange", numhl = "" })
 
 --> Git diff for nvim signs for current buffer
 -- ':sign unplace *' to remove all signs
@@ -79,41 +72,35 @@ vim.api.nvim_create_user_command('Gdiff',
 		    if newline == 0 then
 			table.insert({1, '='}, lines)
 		    else
-			table.insert({newline, '_'}, lines)
+			table.insert(lines, {name = '_', lnum = lnum+newline, buffer = vim.api.nvim_get_current_buf()})
 		    end
 		end
 
 		--> modified
 		if count > 0 and newcount > 0 and count == newcount then
 		    for lnum=0,newcount-1 do
-			table.insert({lnum+newline, '~'})
+			table.insert(lines, {name = '~', lnum = lnum+newline, buffer = vim.api.nvim_get_current_buf()})
 		    end
 		end
 
 		--> modified & added
 		if count > 0 and newcount > 0 and count < newcount then
 		    for lnum=0,count-1 do
-			table.insert({lnum+newline, '~'})
+			table.insert(lines, {name = '~', lnum = lnum+newline, buffer = vim.api.nvim_get_current_buf()})
 		    end
 		    for lnum=count,newcount-1 do
-			table.insert({lnum+newline, '+'})
+			table.insert(lines, {name = '+', lnum = lnum+newline, buffer = vim.api.nvim_get_current_buf()})
 		    end
 		end
 
 		--> modified & removed
 		if count > 0 and newcount > 0 and count > newcount then
 		    for lnum=0,count-1 do
-			table.insert({lnum+newline, '~'})
+			table.insert(lines, {name = '~', lnum = lnum+newline, buffer = vim.api.nvim_get_current_buf()})
 		    end
-		    lines[count-1] = ({newline+newcount-1, '~_'})
+		    lines[count-1] = {name = '~_', lnum = newline+newcount, buffer = vim.api.nvim_get_current_buf()}
 		end
 	    end
 	end
-	-->print(table.getn(lines))
-	--for k, v in pairs(lines) do
-	--    print(v.lnum..','..v.name)
-	--end
-	--> update current 
 	vim.fn.sign_placelist(lines)
     end, {})
-
