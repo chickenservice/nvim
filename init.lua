@@ -11,49 +11,76 @@ vim.o.shellredir = '2>&1 | %%{ "$_" } | Out-File %s; exit $LastExitCode'
 vim.cmd([[hi MatchParen cterm=None ctermfg=199 ctermbg=None]]) 
 vim.cmd([[autocmd TermOpen * setlocal nonumber norelativenumber]]) 
 
-
-vim.fn.sign_define('E', { text = 'E', texthl = "Error", linehl = "", numhl = "" })
-vim.fn.sign_define('W', { text = 'W', texthl = "DiagnosticWarn", linehl = "", numhl = "" })
+--> dotnet build diagnostics
+vim.api.nvim_create_namespace("dotnet_diagnostics")
 vim.api.nvim_create_autocmd({"QuickFixCmdPost"}, {
     callback = function()
-	local errs = {}
+	local buffdiag = {}
+	ns = vim.api.nvim_create_namespace("dotnet_diagnostics")
 	for i, err in pairs(vim.fn.getqflist()) do
-	    if err.type == 'e' or err.type == 'E' then
-		table.insert(errs, {group = 'diagnostics', name = 'E', lnum=err.lnum, buffer=vim.api.nvim_buf_get_name(err.bufnr)})
-	    elseif err.type == 'w' or err.type =='W' then
-		table.insert(errs, {group = 'diagnostics', name = 'W', lnum=err.lnum, buffer=vim.api.nvim_buf_get_name(err.bufnr)})
+	    errbuf = buffdiag[err.bufnr]
+	    if errbuf then
+		table.insert(errbuf, {
+		    lnum = err.lnum,
+		    end_lnum = err.end_lnum,
+		    col=err.col,
+		    end_col=err.end_col,
+		    severity=err.type,
+		    message=err.text
+		})
+	    else
+		table.insert(buffdiag, err.bufnr, {{
+		    lnum = err.lnum,
+		    end_lnum = err.end_lnum,
+		    col=err.col,
+		    end_col=err.end_col,
+		    severity=err.type,
+		    message=err.text
+		}})
 	    end
 	end
-	vim.fn.sign_placelist(errs)
+	for bufnr, diags in pairs(buffdiag) do
+	    vim.diagnostic.set(ns, bufnr, diags)
+	end
     end,
 })
 
-vim.api.nvim_create_autocmd({"QuickFixCmdPre"}, {
-    callback = function()
-	vim.fn.sign_unplace("*", {group="diagnostics"})
-    end,
-})
-
-
-vim.fn.sign_define('+', { text = '+', texthl = "DiffAdd", linehl = "DiffAdd", numhl = "" })
-vim.fn.sign_define('_', { text = '_', texthl = "DiffDelete", linehl = "DiffDelete", numhl = "" })
-vim.fn.sign_define('~_', { text = '~_', texthl = "DiffChange", linehl = "DiffChange", numhl = "" })
-vim.fn.sign_define('~', { text = '~', texthl = "DiffChange", linehl = "DiffChange", numhl = "" })
+vim.api.nvim_create_autocmd({"QuickFixCmdPre"}, { callback = function() vim.diagnostic.reset(ns) end, })
 
 --> Git diff for nvim signs for current buffer
 -- ':sign unplace *' to remove all signs
+vim.fn.sign_define('+', { text = '+', texthl = "DiffAdd", linehl = "DiagnosticOk", numhl = "" })
+vim.fn.sign_define('_', { text = '_', texthl = "DiffDelete", linehl = "DiagnosticError", numhl = "" })
+vim.fn.sign_define('~_', { text = '~_', texthl = "DiffChange", linehl = "DiagnosticWarn", numhl = "" })
+vim.fn.sign_define('~', { text = '~', texthl = "DiffChange", linehl = "DiagnosticWarn", numhl = "" })
+vim.api.nvim_create_namespace("git_diff")
 vim.api.nvim_create_user_command('Gdiff',
     function(opts)
 	--> git --no-pager diff --no-ext-diff --no-color -U0
 	currbuff = vim.fn.expand('%')
 	local diff = vim.fn.system({'git', '--no-pager', 'diff', '--no-ext-diff', '--no-color', '-U0', vim.fn.expand('%')})
 	--> parse hunks
+	--
+	--
+	--   local del = vim.fn.matchlist(line, "+\\(\\.*\\)")
+	--    if table.getn(del) then
+	--	vim.api.nvim_buf_set_extmark(vim.api.nvim_get_current_buf(), ns, linenumber-2, 0, {virt_lines = {{{"test", "DiagnosticError"}}}})
+
+	--
 	local hunkreg = "^@@ -\\(\\d\\+\\),\\?\\(\\d*\\) +\\(\\d\\+\\),\\?\\(\\d*\\) @@"
 	local lines = {}
+	local currline = 1
+	local header_parsed = false
+	ns = vim.api.nvim_create_namespace("git_diff")
 	for line in diff:gmatch('[^\r\n]+') do
 	    local match = vim.fn.matchlist(line, hunkreg)
-	    if table.getn(match) > 0 then
+	    local del = vim.fn.matchlist(line, "-\\(.*\\)")
+	    if table.getn(del) > 0 and header_parsed then
+		vim.api.nvim_buf_set_extmark(vim.api.nvim_get_current_buf(), ns, currline-2, 0, {virt_lines = {{{"-"..del[2], "DiagnosticError"}}}})
+	    elseif table.getn(match) > 0 then
+		header_parsed = true
 		line = tonumber(match[2])
+		currline = line
 		count = tonumber(match[3])
 		if count == nil then count = 1 end
 		newline = tonumber(match[4])
@@ -72,7 +99,11 @@ vim.api.nvim_create_user_command('Gdiff',
 		    if newline == 0 then
 			table.insert({1, '='}, lines)
 		    else
-			table.insert(lines, {name = '_', lnum = lnum+newline, buffer = vim.api.nvim_get_current_buf()})
+			table.insert(lines, {name = '_', lnum = newline, buffer = vim.api.nvim_get_current_buf()})
+			for lnum=0,count do
+			    linenumber = line+lnum
+			    print(linenumber)
+			end
 		    end
 		end
 
@@ -102,5 +133,6 @@ vim.api.nvim_create_user_command('Gdiff',
 		end
 	    end
 	end
-	vim.fn.sign_placelist(lines)
+	--vim.fn.sign_placelist(lines)
     end, {})
+
